@@ -52,7 +52,7 @@ public class AuthorsController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<AuthorDto>> CreateAuthor(AuthorDto author)
+    public async Task<ActionResult<AuthorDto>> CreateAuthor(AuthorForCreationDto author)
     {
         var authorEntity = _mapper.Map<Entities.Author>(author);
 
@@ -64,5 +64,12 @@ public class AuthorsController : ControllerBase
         return CreatedAtRoute("GetAuthor",
             new { authorId = authorToReturn.Id },
             authorToReturn);
+    }
+
+    [HttpOptions]
+    public IActionResult GetAuthorsOptions()
+    {
+        Response.Headers.Add("Allow", "GET,HEAD,OPTIONS,POST");
+        return Ok();
     }
 }
