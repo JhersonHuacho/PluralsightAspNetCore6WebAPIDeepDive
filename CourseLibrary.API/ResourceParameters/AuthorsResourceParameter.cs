@@ -14,5 +14,7 @@
             get => _pageSize; 
             set => _pageSize = (value > maxPagesSize) ? maxPagesSize : value; 
         }
+
+        public string? OrderBy { get; set; } = "Name";
     }
 }

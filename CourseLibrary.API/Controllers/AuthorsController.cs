@@ -1,5 +1,6 @@
 ﻿
 using AutoMapper;
+using CourseLibrary.API.Entities;
 using CourseLibrary.API.Helpers;
 using CourseLibrary.API.Models;
 using CourseLibrary.API.ResourceParameters;
@@ -15,15 +16,16 @@ public class AuthorsController : ControllerBase
 {
     private readonly ICourseLibraryRepository _courseLibraryRepository;
     private readonly IMapper _mapper;
+    private readonly IPropertyMappingService _propertyMappingService;
 
     public AuthorsController(
         ICourseLibraryRepository courseLibraryRepository,
-        IMapper mapper)
+        IMapper mapper,
+        IPropertyMappingService propertyMappingService)
     {
-        _courseLibraryRepository = courseLibraryRepository ??
-            throw new ArgumentNullException(nameof(courseLibraryRepository));
-        _mapper = mapper ??
-            throw new ArgumentNullException(nameof(mapper));
+        _courseLibraryRepository = courseLibraryRepository ?? throw new ArgumentNullException(nameof(courseLibraryRepository));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _propertyMappingService = propertyMappingService ?? throw new ArgumentNullException(nameof(propertyMappingService));
     }
 
     [HttpGet(Name = "GetAuthors")]
@@ -32,6 +34,11 @@ public class AuthorsController : ControllerBase
         [FromQuery] AuthorsResourceParameter authorsResourceParameter)
     {
         //throw new Exception("Test Exception");
+        if (!_propertyMappingService.ValidMappingExistsFor<AuthorDto, Author>(authorsResourceParameter.OrderBy))
+        {
+            return BadRequest();
+        }
+
         // get authors from repo
         var authorsFromRepo = await _courseLibraryRepository
             .GetAuthorsAsync(authorsResourceParameter);
@@ -65,6 +72,7 @@ public class AuthorsController : ControllerBase
                 return Url.Link("GetAuthors",
                     new
                     {
+                        orderBy = authorsResourceParameter.OrderBy,
                         pageNumber = authorsResourceParameter.PageNumber - 1,
                         pageSize = authorsResourceParameter.PageSize,
                         mainCategory = authorsResourceParameter.MainCategory,
@@ -74,6 +82,7 @@ public class AuthorsController : ControllerBase
                 return Url.Link("GetAuthors",
                     new
                     {
+                        orderBy = authorsResourceParameter.OrderBy,
                         pageNumber = authorsResourceParameter.PageNumber + 1,
                         pageSize = authorsResourceParameter.PageSize,
                         mainCategory = authorsResourceParameter.MainCategory,
@@ -83,6 +92,7 @@ public class AuthorsController : ControllerBase
                 return Url.Link("GetAuthors",
                     new
                     {
+                        orderBy = authorsResourceParameter.OrderBy,
                         pageNumber = authorsResourceParameter.PageNumber,
                         pageSize = authorsResourceParameter.PageSize,
                         mainCategory = authorsResourceParameter.MainCategory,
