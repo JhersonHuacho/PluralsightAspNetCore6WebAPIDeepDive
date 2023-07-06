@@ -181,6 +181,7 @@ public class CoursesController : ControllerBase
 
     public override ActionResult ValidationProblem([ActionResultObjectValue] ModelStateDictionary modelStateDictionary)
     {
+        // Este es una implementación especifica de ese estándar de ProblemDetailsFactory
         var options = HttpContext.RequestServices
             .GetRequiredService<IOptions<ApiBehaviorOptions>>();
 
