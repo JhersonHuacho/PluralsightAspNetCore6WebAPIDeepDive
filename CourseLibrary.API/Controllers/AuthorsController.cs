@@ -1,12 +1,15 @@
 ﻿
 using AutoMapper;
+using CourseLibrary.API.ActionConstraints;
 using CourseLibrary.API.Entities;
 using CourseLibrary.API.Helpers;
 using CourseLibrary.API.Models;
 using CourseLibrary.API.ResourceParameters;
 using CourseLibrary.API.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Formatters;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.Net.Http.Headers;
 using System.Dynamic;
 using System.Text.Json;
 
@@ -41,7 +44,7 @@ public class AuthorsController : ControllerBase
     //public async Task<ActionResult<IEnumerable<AuthorDto>>> GetAuthors(
     public async Task<ActionResult> GetAuthors(
         [FromQuery] AuthorsResourceParameter authorsResourceParameter)
-    {
+    {       
         //throw new Exception("Test Exception");
         
         if (!_propertyMappingService.ValidMappingExistsFor<AuthorDto, Author>(authorsResourceParameter.OrderBy))
@@ -62,11 +65,11 @@ public class AuthorsController : ControllerBase
         var authorsFromRepo = await _courseLibraryRepository
             .GetAuthorsAsync(authorsResourceParameter);
 
-        var previousPageLink = authorsFromRepo.HasPrevious 
-            ? CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.PreviousPage) : null;
+        //var previousPageLink = authorsFromRepo.HasPrevious 
+        //    ? CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.PreviousPage) : null;
 
-        var nextPageLink = authorsFromRepo.HasNext
-            ? CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.NextPage) : null;
+        //var nextPageLink = authorsFromRepo.HasNext
+        //    ? CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.NextPage) : null;
 
         var paginationMetadata = new
         {
@@ -74,14 +77,65 @@ public class AuthorsController : ControllerBase
             pageSize = authorsFromRepo.PageSize,
             currentPage = authorsFromRepo.CurrentPage,
             totalPages = authorsFromRepo.TotalPages,
-            previousPageLink,
-            nextPageLink
+            //previousPageLink,
+            //nextPageLink
         };
 
         Response.Headers.Add("X-Pagination", JsonSerializer.Serialize(paginationMetadata));
+
+        // create links
+        var links = CreateLinksForAuthors(authorsResourceParameter, 
+            authorsFromRepo.HasNext,
+            authorsFromRepo.HasPrevious);
+
+        var shapedAuthors = _mapper.Map<IEnumerable<AuthorDto>>(authorsFromRepo)
+                       .ShapeData(authorsResourceParameter.Fields);
+        var shapedAuthorsWithLinks = shapedAuthors.Select(author =>
+        {
+            var authorAsDictionary = author as IDictionary<string, object>;
+            var authorLinks = CreateLinksForAuthor((Guid)authorAsDictionary["Id"], null);
+            authorAsDictionary.Add("links", authorLinks);
+            return authorAsDictionary;
+        });
+
+        var linkedCollectionResource = new
+        {
+            value = shapedAuthorsWithLinks,
+            links
+        };
+
         // return them
-        return Ok(_mapper.Map<IEnumerable<AuthorDto>>(authorsFromRepo)
-            .ShapeData(authorsResourceParameter.Fields));
+        return Ok(linkedCollectionResource);
+    }
+
+    private IEnumerable<LinkDto> CreateLinksForAuthors(
+        AuthorsResourceParameter authorsResourceParameter,
+        bool hasNext, bool hasPrevious)
+    {
+        var links = new List<LinkDto>
+        {
+            // self
+            new LinkDto(CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.Current),
+            "self",
+            "GET")
+        };
+
+        if (hasNext)
+        {
+            links.Add(
+                new(CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.NextPage),
+                "nextPage",
+                "GET"));
+        }
+        if (hasPrevious)
+        {
+            links.Add(
+                new(CreateAuthorsResourceUri(authorsResourceParameter, ResourceUriType.PreviousPage),
+                "previousPage",
+                "GET"));
+        }
+
+        return links;
     }
 
     private string? CreateAuthorsResourceUri(AuthorsResourceParameter authorsResourceParameter, ResourceUriType type)
@@ -110,6 +164,7 @@ public class AuthorsController : ControllerBase
                         mainCategory = authorsResourceParameter.MainCategory,
                         searchQuery = authorsResourceParameter.SearchQuery
                     });
+            case ResourceUriType.Current:
             default:
                 return Url.Link("GetAuthors",
                     new
@@ -124,11 +179,27 @@ public class AuthorsController : ControllerBase
         }
     }
 
+    [Produces("application/json", 
+        "application/vnd.marvin.hateoas+json", 
+        "application/vnd.marvin.author.full+json", 
+        "application/vnd.marvin.author.full.hateoas+json", 
+        "application/vnd.marvin.author.friendly+json", 
+        "application/vnd.marvin.author.friendly.hateoas+json")]
     [HttpGet("{authorId}", Name = "GetAuthor")]
     //public async Task<ActionResult<AuthorDto>> GetAuthor(Guid authorId,
     public async Task<ActionResult> GetAuthor(Guid authorId,
-        string? fields)
+        string? fields,
+        [FromHeader(Name = "Accept")] string? mediaType)
     {
+        // check if the inputted media type is a valid media type
+        if (!MediaTypeHeaderValue.TryParse(mediaType, out var parsedMediaType))
+        {
+            return BadRequest(
+                _problemDetailsFactory.CreateProblemDetails(HttpContext,
+                    statusCode: 400,
+                    detail: $"Accept header media type value is not a valid mdeia type."));
+        }
+
         if (!_propertyCheckerService.TypeHasProperties<AuthorDto>(fields))
         {
             return BadRequest(
@@ -146,24 +217,149 @@ public class AuthorsController : ControllerBase
             return NotFound();
         }
 
-        // return author
-        return Ok(_mapper.Map<AuthorDto>(authorFromRepo)
-            .ShapeData(fields));
+        var includeLinks = parsedMediaType.SubTypeWithoutSuffix
+            .EndsWith("hateoas", StringComparison.InvariantCultureIgnoreCase);
+        IEnumerable<LinkDto> links = new List<LinkDto>();
+
+        if (includeLinks)
+        {
+            links = CreateLinksForAuthor(authorId, fields);
+        }
+
+        var primaryMediaType = includeLinks
+            ? parsedMediaType.SubTypeWithoutSuffix.Substring(0, parsedMediaType.SubTypeWithoutSuffix.Length - 8)
+            : parsedMediaType.SubTypeWithoutSuffix;
+
+        // full author
+        if (primaryMediaType == "vnd.marvin.author.full")
+        {
+            var fullResourceToReturn = _mapper.Map<AuthorFullDto>(authorFromRepo)
+                .ShapeData(fields) as IDictionary<string, object>;
+
+            if (includeLinks)
+            {
+                fullResourceToReturn.Add("links", links);
+            }
+
+            return Ok(fullResourceToReturn);
+        }
+
+        // friendly author
+        var friendlyResourceToReturn = _mapper.Map<AuthorDto>(authorFromRepo)
+            .ShapeData(fields) as IDictionary<string, object>;
+
+        if (includeLinks)
+        {
+            friendlyResourceToReturn.Add("links", links);
+        }
+
+        return Ok(friendlyResourceToReturn);
+
+        //if (parsedMediaType.MediaType == "application/vnd.marvin.hateoas+json")
+        //{
+        //    // create links
+        //    var links = CreateLinksForAuthor(authorId, fields);
+
+        //    // add
+        //    var linkedResourceToReturn = _mapper.Map<AuthorDto>(authorFromRepo)
+        //        .ShapeData(fields) as IDictionary<string, object>;
+
+        //    linkedResourceToReturn.Add("links", links);
+
+        //    // return author
+        //    return Ok(linkedResourceToReturn);
+        //}
+
+        //return Ok(_mapper.Map<AuthorDto>(authorFromRepo));
     }
 
-    [HttpPost]
+    private IEnumerable<LinkDto> CreateLinksForAuthor(Guid authorId, string? fields)
+    {
+        var links = new List<LinkDto>();
+        
+        if (string.IsNullOrWhiteSpace(fields))
+        {
+            links.Add(
+                new LinkDto(Url.Link("GetAuthor", new { authorId }),
+                "self",
+                "GET"));
+        }
+        else
+        {
+            links.Add(
+                new LinkDto(Url.Link("GetAuthor", new { authorId, fields }),
+                    "self",
+                    "GET"));
+        }
+
+        links.Add(
+            new LinkDto(Url.Link("CreateCourseForAuthor", new { authorId }),
+                "create_course_for_author",
+                "POST"));
+
+        links.Add(
+            new LinkDto(Url.Link("GetCoursesForAuthor ", new { authorId }),
+                "courses",
+                "GET"));
+
+        return links;
+    }    
+
+    [HttpPost(Name = "CreateAuthorWithDateOfDeath")]
+    [RequestHeaderMatchesMediaType("Content-Type",
+        "application/vnd.marvin.authorforcreationwithdateofdeath+json")]        
+    [Consumes("application/vnd.marvin.authorforcreationwithdateofdeath+json")]              
+    public async Task<ActionResult<AuthorDto>> CreateAuthorWithDateOfDeath(
+        AuthorForCreationWithDateOfDeathDto author)
+    {
+        var authorEntity = _mapper.Map<Entities.Author>(author);
+
+        _courseLibraryRepository.AddAuthor(authorEntity);
+        await _courseLibraryRepository.SaveAsync();
+
+        var authorToReturn = _mapper.Map<AuthorDto>(authorEntity);
+
+        // create links
+        var links = CreateLinksForAuthor(authorToReturn.Id, null);
+
+        // add
+        var linkedResourceToReturn = authorToReturn.ShapeData(null)
+            as IDictionary<string, object?>;
+
+        linkedResourceToReturn.Add("links", links);
+
+        return CreatedAtRoute("GetAuthor",
+            new { authorId = linkedResourceToReturn["Id"] },
+            linkedResourceToReturn);
+    }
+
+    [HttpPost(Name = "CreateAuthor")]
+    [RequestHeaderMatchesMediaType("Content-Type",
+        "application/json",
+        "application/vnd.marvin.authorforcreation+json")]
+    [Consumes("application/json",
+        "application/vnd.marvin.authorforcreation+json")]
     public async Task<ActionResult<AuthorDto>> CreateAuthor(AuthorForCreationDto author)
     {
         var authorEntity = _mapper.Map<Entities.Author>(author);
 
         _courseLibraryRepository.AddAuthor(authorEntity);
-        await _courseLibraryRepository.SaveAsync(); 
+        await _courseLibraryRepository.SaveAsync();
 
         var authorToReturn = _mapper.Map<AuthorDto>(authorEntity);
 
+        // create links
+        var links = CreateLinksForAuthor(authorToReturn.Id, null);
+
+        // add
+        var linkedResourceToReturn = authorToReturn.ShapeData(null)
+            as IDictionary<string, object?>;
+
+        linkedResourceToReturn.Add("links", links);
+
         return CreatedAtRoute("GetAuthor",
-            new { authorId = authorToReturn.Id },
-            authorToReturn);
+            new { authorId = linkedResourceToReturn["Id"] },
+            linkedResourceToReturn);
     }
 
     [HttpOptions]

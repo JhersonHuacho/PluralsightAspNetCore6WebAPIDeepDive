@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 
 namespace CourseLibrary.API.Entities;
 
@@ -17,6 +18,7 @@ public class Author
 
     [Required]
     public DateTimeOffset DateOfBirth { get; set; }
+    public DateTimeOffset? DateOfDeath { get; set; }
 
     [Required]
     [MaxLength(50)]
